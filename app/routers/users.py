@@ -4,6 +4,7 @@ from app.core.database import engine
 from app.core.security import hash_password, verify_password, create_access_token, get_current_user, require_admin
 from app.models.user import User
 from app.schemas.user import UserCreate, UserResponse, Token, UserUpdate, PasswordUpdate
+from app.core.database import get_db
 
 router = APIRouter()
 
@@ -66,9 +67,16 @@ def login_user(form_data: LoginForm = Depends(), db: Session = Depends(get_db)):
 
 @router.get("/me", response_model=UserResponse)
 def get_my_profile(
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+
 ):
-    return current_user
+    user = (
+        db.query(User)
+        .filter(User.id == current_user.id)
+        .first()
+    )
+    return user
 
 
 
@@ -79,16 +87,37 @@ def update_my_profile(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    user = (
+        db.query(User)
+        .filter(User.id == current_user.id)
+        .first()
+    )
+
+    if user_data.username is not None:
+        existing_user = (
+            db.query(User)
+            .filter(User.username == user_data.username)
+            .first()
+        )
+
+        if existing_user and existing_user.id != user.id:
+            raise HTTPException(
+                status_code=400,
+                detail="Username already exists",
+            )
+
+        user.username = user_data.username
+
     if user_data.first_name is not None:
-        current_user.first_name = user_data.first_name
+        user.first_name = user_data.first_name
 
     if user_data.last_name is not None:
-        current_user.last_name = user_data.last_name
+        user.last_name = user_data.last_name
 
     db.commit()
-    db.refresh(current_user)
+    db.refresh(user)
 
-    return current_user
+    return user
 
 
 @router.put("/me/password")

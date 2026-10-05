@@ -31,6 +31,18 @@ class UserResponse(BaseModel):
 class UserUpdate(BaseModel):
     first_name: str  | None=Field(default=None, min_length=2, max_length=50)
     last_name: str | None=Field(default=None, min_length=2, max_length=50)
+    username: str | None = Field(default=None, min_length=3, max_length=50)
+
+    @field_validator("username")
+    @classmethod
+    def validate_username(cls, value: str | None):
+        if value is not None:
+            value = value.strip()
+
+            if " " in value:
+                raise ValueError("Username cannot contain spaces")
+
+        return value
 
 
 class PasswordUpdate(BaseModel):
