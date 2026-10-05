@@ -7,6 +7,16 @@ class UserCreate(BaseModel):
     last_name: str=Field(min_length=2, max_length=50)
     password: str=Field(min_length=6, max_length=100)
 
+    @field_validator("username")
+    @classmethod
+    def validate_username(cls, value: str):
+        value = value.strip()
+
+        if " " in value:
+           raise ValueError("Username cannot contain spaces")
+        return value
+
+
 
 class UserResponse(BaseModel):
     id: int
@@ -16,8 +26,18 @@ class UserResponse(BaseModel):
     role: str
     created_at: datetime
 
-   
+
 
 class UserUpdate(BaseModel):
     first_name: str  | None=Field(default=None, min_length=2, max_length=50)
     last_name: str | None=Field(default=None, min_length=2, max_length=50)
+
+
+class PasswordUpdate(BaseModel):
+    current_password: str=Field(min_length=6, max_length=100)
+    new_password: str=Field(min_length=6, max_length=100)
+
+
+class Token(BaseModel):
+    access_token: str
+    token_type: str 
