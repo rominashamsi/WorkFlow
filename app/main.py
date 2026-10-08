@@ -2,11 +2,11 @@ from fastapi import FastAPI
 from app.core.database import engine, base
 from app.models import User, Project, ProjectMember, Task, Comment
 
-from app.routers import users
+from app.routers import users,projects, tasks
 
 base.metadata.create_all(bind=engine)
 
-app=FastAPI()
+app=FastAPI(title="WorkFlow")
 
 
 
@@ -17,6 +17,20 @@ app.include_router(
     prefix="/users",
     tags=["Users"]
 )
+
+app.include_router(
+    projects.router,
+    prefix="/projects",
+    tags=["Projects"]
+)
+
+
+app.include_router(
+    tasks.router,
+    prefix="/projects/{project_id}/tasks",
+    tags=["Tasks"]
+)
+
 
 @app.get("/")
 def home():
