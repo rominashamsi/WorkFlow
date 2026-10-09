@@ -18,6 +18,7 @@ class Task(base):
     priority = Column(String, nullable=False)
     deadline = Column(DateTime)
     created_at = Column(DateTime, default=datetime.utcnow)
+    estimated_hours = Column(Integer)
 
     project = relationship("Project", back_populates="tasks")
     assignee = relationship("User", back_populates="tasks")

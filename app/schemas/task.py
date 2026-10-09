@@ -1,15 +1,16 @@
-from pydantic import BaseModel, Field
 from datetime import datetime
 
+from pydantic import BaseModel, Field
 
 
 class TaskCreate(BaseModel):
     title: str = Field(min_length=2, max_length=200)
     description: str | None = Field(default=None, max_length=1000)
     assigned_to: int
-    status: str = "to do"
+    status: str = "todo"
     priority: str = "medium"
     deadline: datetime | None = None
+    estimated_hours: int | None = Field(default=None, ge=0)
 
 
 class TaskResponse(BaseModel):
@@ -21,6 +22,7 @@ class TaskResponse(BaseModel):
     status: str
     priority: str
     deadline: datetime | None
+    estimated_hours: int | None
     created_at: datetime
 
 
@@ -31,3 +33,4 @@ class TaskUpdate(BaseModel):
     status: str | None = None
     priority: str | None = None
     deadline: datetime | None = None
+    estimated_hours: int | None = Field(default=None, ge=0)

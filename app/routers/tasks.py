@@ -85,6 +85,7 @@ def create_task(
         status=task_data.status,
         priority=task_data.priority,
         deadline=task_data.deadline,
+        estimated_hours=task_data.estimated_hours,
     )
 
     db.add(new_task)
@@ -261,6 +262,10 @@ def update_task(
 
     if task_data.deadline is not None:
         task.deadline = task_data.deadline
+
+
+    if task_data.estimated_hours is not None:
+        task.estimated_hours = task_data.estimated_hours
 
     db.commit()
     db.refresh(task)
