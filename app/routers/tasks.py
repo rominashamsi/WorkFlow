@@ -1,18 +1,18 @@
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
+
 from app.core.database import get_db
-from app.models.task import Task
-from app.models.user import User
+from app.core.permissions import get_project_member
+from app.core.security import get_current_user
 from app.models.project import Project
 from app.models.project_member import ProjectMember
+from app.models.task import Task
+from app.models.user import User
 from app.schemas.task import TaskCreate, TaskResponse, TaskUpdate
-from app.core.security import get_current_user
 
 
 router = APIRouter()
-
-
-
 
 
 @router.post("/", response_model=TaskResponse)
@@ -22,37 +22,15 @@ def create_task(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    project = (
-        db.query(Project)
-        .filter(Project.id == project_id)
-        .first()
-    )
-
-    if project is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Project not found",
-        )
-
-    is_member = (
-        db.query(ProjectMember)
-        .filter(
-            ProjectMember.project_id == project_id,
-            ProjectMember.user_id == current_user.id,
-        )
-        .first()
-    )
-
-    
-    if is_member is None:
-        raise HTTPException(
-            status_code=403,
-            detail="You are not a member of this project",
+    project = get_project_member(
+        project_id,
+        current_user,
+        db,
     )
 
     assigned_user = (
         db.query(User)
-        .filter(User.id == task_data.assigned_to) # "assigned_to" comes from the request body through the TaskCreate schema
+        .filter(User.id == task_data.assigned_to)
         .first()
     )
 
@@ -75,12 +53,13 @@ def create_task(
         raise HTTPException(
             status_code=400,
             detail="Assigned user is not a member of this project",
-    )
+        )
 
     new_task = Task(
         title=task_data.title,
-        description=task_data.description,   # "title" is the Task model field; "task_data.title" comes from the TaskCreate schema
-        project_id=project_id,
+        description=task_data.description,
+        project_id=project.id,
+        created_by=current_user.id,
         assigned_to=task_data.assigned_to,
         status=task_data.status,
         priority=task_data.priority,
@@ -101,32 +80,11 @@ def get_tasks(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    project = (
-        db.query(Project)
-        .filter(Project.id == project_id)
-        .first()
+    get_project_member(
+        project_id,
+        current_user,
+        db,
     )
-
-    if project is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Project not found",
-        )
-
-    is_member = (
-        db.query(ProjectMember)
-        .filter(
-            ProjectMember.project_id == project_id,
-            ProjectMember.user_id == current_user.id,
-        )
-        .first()
-    )
-
-    if project.created_by != current_user.id and is_member is None:
-        raise HTTPException(
-            status_code=403,
-            detail="You are not a member of this project",
-        )
 
     tasks = (
         db.query(Task)
@@ -144,31 +102,10 @@ def get_task(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    project = (
-        db.query(Project)
-        .filter(Project.id == project_id)
-        .first()
-    )
-
-    if project is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Project not found",
-        )
-
-    is_member = (
-        db.query(ProjectMember)
-        .filter(
-            ProjectMember.project_id == project_id,
-            ProjectMember.user_id == current_user.id,
-        )
-        .first()
-    )
-
-    if is_member is None:
-         raise HTTPException(
-            status_code=403,
-            detail="You are not a member of this project",
+    get_project_member(
+        project_id,
+        current_user,
+        db,
     )
 
     task = (
@@ -197,17 +134,11 @@ def update_task(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    project = (
-        db.query(Project)
-        .filter(Project.id == project_id)
-        .first()
+    project = get_project_member(
+        project_id,
+        current_user,
+        db,
     )
-
-    if project is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Project not found",
-        )
 
     if project.created_by != current_user.id:
         raise HTTPException(
@@ -237,20 +168,32 @@ def update_task(
         task.description = task_data.description
 
     if task_data.assigned_to is not None:
-        assigned_user_is_member = (
-            db.query(ProjectMember)
-                       .filter(
-                        ProjectMember.project_id == project_id,
-                        ProjectMember.user_id == task_data.assigned_to,)
-                        .first()
+        assigned_user = (
+            db.query(User)
+            .filter(User.id == task_data.assigned_to)
+            .first()
         )
 
+        if assigned_user is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Assigned user not found",
+            )
+
+        assigned_user_is_member = (
+            db.query(ProjectMember)
+            .filter(
+                ProjectMember.project_id == project_id,
+                ProjectMember.user_id == task_data.assigned_to,
+            )
+            .first()
+        )
 
         if assigned_user_is_member is None:
             raise HTTPException(
-            status_code=400,
-            detail="Assigned user is not a member of this project",
-       )
+                status_code=400,
+                detail="Assigned user is not a member of this project",
+            )
 
         task.assigned_to = task_data.assigned_to
 
@@ -262,7 +205,6 @@ def update_task(
 
     if task_data.deadline is not None:
         task.deadline = task_data.deadline
-
 
     if task_data.estimated_hours is not None:
         task.estimated_hours = task_data.estimated_hours
@@ -280,17 +222,11 @@ def delete_task(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    project = (
-        db.query(Project)
-        .filter(Project.id == project_id)
-        .first()
+    project = get_project_member(
+        project_id,
+        current_user,
+        db,
     )
-
-    if project is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Project not found",
-        )
 
     if project.created_by != current_user.id:
         raise HTTPException(

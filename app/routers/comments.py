@@ -1,12 +1,12 @@
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.core.permissions import get_project_member
 from app.core.security import get_current_user
 from app.models.comment import Comment
-from app.models.project_member import ProjectMember
 from app.models.task import Task
-from app.models.project import Project
 from app.models.user import User
 from app.schemas.comment import (
     CommentCreate,
@@ -26,38 +26,13 @@ def create_comment(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    project = (
-        db.query(Project)
-        .filter(Project.id == project_id)
-        .first()
-    )
-
-    if project is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Project not found",
-        )
-
-    is_member = (
-        db.query(ProjectMember)
-        .filter(
-            ProjectMember.project_id == project_id,
-            ProjectMember.user_id == current_user.id,
-        )
-        .first()
-    )
-
-    if is_member is None:
-        raise HTTPException(
-            status_code=403,
-            detail="You are not a member of this project",
-        )
+    project = get_project_member(project_id, current_user, db)
 
     task = (
         db.query(Task)
         .filter(
             Task.id == task_id,
-            Task.project_id == project_id,
+            Task.project_id == project.id,
         )
         .first()
     )
@@ -88,38 +63,13 @@ def get_comments(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    project = (
-        db.query(Project)
-        .filter(Project.id == project_id)
-        .first()
-    )
-
-    if project is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Project not found",
-        )
-
-    is_member = (
-        db.query(ProjectMember)
-        .filter(
-            ProjectMember.project_id == project_id,
-            ProjectMember.user_id == current_user.id,
-        )
-        .first()
-    )
-
-    if is_member is None:
-        raise HTTPException(
-            status_code=403,
-            detail="You are not a member of this project",
-        )
+    project = get_project_member(project_id, current_user, db)
 
     task = (
         db.query(Task)
         .filter(
             Task.id == task_id,
-            Task.project_id == project_id,
+            Task.project_id == project.id,
         )
         .first()
     )
@@ -132,7 +82,7 @@ def get_comments(
 
     return (
         db.query(Comment)
-        .filter(Comment.task_id == task_id)
+        .filter(Comment.task_id == task.id)
         .all()
     )
 
@@ -146,11 +96,28 @@ def update_comment(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    project = get_project_member(project_id, current_user, db)
+
+    task = (
+        db.query(Task)
+        .filter(
+            Task.id == task_id,
+            Task.project_id == project.id,
+        )
+        .first()
+    )
+
+    if task is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Task not found",
+        )
+
     comment = (
         db.query(Comment)
         .filter(
             Comment.id == comment_id,
-            Comment.task_id == task_id,
+            Comment.task_id == task.id,
         )
         .first()
     )
@@ -183,11 +150,28 @@ def delete_comment(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    project = get_project_member(project_id, current_user, db)
+
+    task = (
+        db.query(Task)
+        .filter(
+            Task.id == task_id,
+            Task.project_id == project.id,
+        )
+        .first()
+    )
+
+    if task is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Task not found",
+        )
+
     comment = (
         db.query(Comment)
         .filter(
             Comment.id == comment_id,
-            Comment.task_id == task_id,
+            Comment.task_id == task.id,
         )
         .first()
     )
@@ -210,3 +194,5 @@ def delete_comment(
     return {
         "message": "Comment deleted successfully"
     }
+
+

@@ -1,9 +1,12 @@
 
 import json
 
+from app.core.permissions import get_project_member
+
+
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
 from redis.exceptions import RedisError
+from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.redis import redis_client
@@ -22,15 +25,16 @@ from app.schemas.project import (
 
 router = APIRouter()
 
-PROJECTS_CACHE_KEY = "projects:list"
 CACHE_EXPIRE_SECONDS = 300
 
 
-def clear_projects_cache():
+def clear_projects_cache(user_id: int):
     try:
-        redis_client.delete(PROJECTS_CACHE_KEY)
+        redis_client.delete(f"projects:list:{user_id}")
     except RedisError:
         pass
+
+
 
 
 @router.post("/", response_model=ProjectResponse)
@@ -72,7 +76,7 @@ def create_project(
     db.commit()
     db.refresh(new_project)
 
-    clear_projects_cache()
+    clear_projects_cache(current_user.id)
 
     return new_project
 
@@ -82,16 +86,28 @@ def get_projects(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    try:
-        cached_projects = redis_client.get(PROJECTS_CACHE_KEY)
+    cache_key = f"projects:list:{current_user.id}"
 
+    try:
+        cached_projects = redis_client.get(cache_key)
         if cached_projects is not None:
             return json.loads(cached_projects)
-
     except (RedisError, json.JSONDecodeError):
         pass
 
-    projects = db.query(Project).all()
+    query = db.query(Project)
+
+    if current_user.role != "admin":
+        query = (
+            query
+            .join(
+                ProjectMember,
+                ProjectMember.project_id == Project.id,
+            )
+            .filter(ProjectMember.user_id == current_user.id)
+        )
+
+    projects = query.all()
 
     projects_data = [
         {
@@ -110,7 +126,7 @@ def get_projects(
 
     try:
         redis_client.setex(
-            PROJECTS_CACHE_KEY,
+            cache_key,
             CACHE_EXPIRE_SECONDS,
             json.dumps(projects_data),
         )
@@ -120,23 +136,18 @@ def get_projects(
     return projects_data
 
 
+
 @router.get("/{project_id}", response_model=ProjectResponse)
 def get_project(
     project_id: int,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    project = (
-        db.query(Project)
-        .filter(Project.id == project_id)
-        .first()
+    project = get_project_member(
+        project_id,
+        current_user,
+        db,
     )
-
-    if project is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Project not found",
-        )
 
     return project
 
@@ -166,6 +177,13 @@ def update_project(
             detail="You can only update your own projects",
         )
 
+    member_ids = [
+        member.user_id
+        for member in db.query(ProjectMember)
+        .filter(ProjectMember.project_id == project_id)
+        .all()
+    ]
+
     if project_data.name is not None:
         project.name = project_data.name
 
@@ -175,7 +193,8 @@ def update_project(
     db.commit()
     db.refresh(project)
 
-    clear_projects_cache()
+    for user_id in member_ids:
+        clear_projects_cache(user_id)
 
     return project
 
@@ -204,10 +223,18 @@ def delete_project(
             detail="You can only delete your own projects",
         )
 
+    member_ids = [
+        member.user_id
+        for member in db.query(ProjectMember)
+        .filter(ProjectMember.project_id == project_id)
+        .all()
+    ]
+
     db.delete(project)
     db.commit()
 
-    clear_projects_cache()
+    for user_id in member_ids:
+        clear_projects_cache(user_id)
 
     return {"message": "Project deleted successfully"}
 
@@ -273,6 +300,8 @@ def add_project_member(
     db.commit()
     db.refresh(new_member)
 
+    clear_projects_cache(member_data.user_id)
+
     return {
         "message": "User added to project successfully",
         "project_id": project_id,
@@ -289,17 +318,7 @@ def get_project_members(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    project = (
-        db.query(Project)
-        .filter(Project.id == project_id)
-        .first()
-    )
-
-    if project is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Project not found",
-        )
+    get_project_member(project_id, current_user, db)
 
     members = (
         db.query(ProjectMember)
@@ -316,15 +335,16 @@ def get_project_members(
             .first()
         )
 
-        result.append(
-            {
-                "id": member.id,
-                "user_id": user.id,
-                "username": user.username,
-                "first_name": user.first_name,
-                "last_name": user.last_name,
-            }
-        )
+        if user is not None:
+            result.append(
+                {
+                    "id": member.id,
+                    "user_id": user.id,
+                    "username": user.username,
+                    "first_name": user.first_name,
+                    "last_name": user.last_name,
+                }
+            )
 
     return result
 
@@ -377,5 +397,7 @@ def remove_project_member(
 
     db.delete(member)
     db.commit()
+
+    clear_projects_cache(user_id)
 
     return {"message": "User removed from project successfully"}

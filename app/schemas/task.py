@@ -24,6 +24,7 @@ class TaskResponse(BaseModel):
     deadline: datetime | None
     estimated_hours: int | None
     created_at: datetime
+    created_by: int | None
 
 
 class TaskUpdate(BaseModel):
