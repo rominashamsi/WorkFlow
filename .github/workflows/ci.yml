@@ -11,6 +11,11 @@ jobs:
   test:
     runs-on: ubuntu-latest
 
+    env:
+      SQLALCHEMY_DATABASE_URL: sqlite:///./workflow_ci.db
+      SECRET_KEY: test-secret-key-for-ci-only
+      ACCESS_TOKEN_EXPIRE_MINUTES: "30"
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
