@@ -1,5 +1,5 @@
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import Column, DateTime, ForeignKey, Integer, String
 from sqlalchemy.orm import relationship
@@ -35,7 +35,10 @@ class Task(base):
     status = Column(String, nullable=False)
     priority = Column(String, nullable=False)
     deadline = Column(DateTime)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(
+    DateTime,
+    default=lambda: datetime.now(timezone.utc),
+    ) 
     estimated_hours = Column(Integer)
 
     project = relationship(
@@ -60,3 +63,4 @@ class Task(base):
         back_populates="task",
         cascade="all, delete-orphan",
     )
+

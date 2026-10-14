@@ -13,6 +13,7 @@ from app.models.project import Project
 from app.models.project_member import ProjectMember
 from app.models.task import Task
 from app.models.comment import Comment
+import os
 
 
 config = context.config
@@ -21,10 +22,12 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 
-config.set_main_option(
-    "sqlalchemy.url",
+database_url = os.getenv(
+    "ALEMBIC_DATABASE_URL",
     settings.SQLALCHEMY_DATABASE_URL,
 )
+
+config.set_main_option("sqlalchemy.url", database_url)
 
 
 target_metadata = base.metadata

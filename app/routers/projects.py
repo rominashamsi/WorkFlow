@@ -125,13 +125,14 @@ def get_projects(
     ]
 
     try:
-        redis_client.setex(
+        redis_client.set(
             cache_key,
-            CACHE_EXPIRE_SECONDS,
             json.dumps(projects_data),
+            ex=CACHE_EXPIRE_SECONDS,
         )
     except RedisError:
         pass
+
 
     return projects_data
 

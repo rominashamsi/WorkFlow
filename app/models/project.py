@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import Column, DateTime, ForeignKey, Integer, String
 from sqlalchemy.orm import relationship
@@ -13,7 +13,10 @@ class Project(base):
     name = Column(String, nullable=False)
     description = Column(String)
     created_by = Column(Integer, ForeignKey("users.id"), nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(
+    DateTime,
+    default=lambda: datetime.now(timezone.utc),
+    )
 
     creator = relationship("User", back_populates="projects")
 

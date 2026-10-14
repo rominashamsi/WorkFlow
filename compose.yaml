@@ -1,0 +1,31 @@
+
+services:
+  app:
+    build: .
+    container_name: workflow-app
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      SQLALCHEMY_DATABASE_URL: sqlite:////app/data/workflow.db
+      ALEMBIC_DATABASE_URL: sqlite:////app/data/workflow.db
+    volumes:
+      - workflow_data:/app/data
+    depends_on:
+      redis:
+        condition: service_started
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000"
+
+  redis:
+    image: redis:7-alpine
+    container_name: workflow-redis-compose
+    ports:
+      - "6380:6379"
+
+volumes:
+  workflow_data:

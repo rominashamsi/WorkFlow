@@ -1,5 +1,5 @@
 
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy import Column, Integer, String, DateTime
 from sqlalchemy.orm import relationship
 
@@ -15,7 +15,10 @@ class User(base):
     last_name = Column(String, nullable=False)
     password = Column(String, nullable=False)
     role = Column(String, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(
+    DateTime,
+    default=lambda: datetime.now(timezone.utc),
+    )
 
     projects = relationship("Project", back_populates="creator")
 
