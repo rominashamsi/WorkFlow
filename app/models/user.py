@@ -1,6 +1,7 @@
 
-from datetime import datetime, timezone
-from sqlalchemy import Column, Integer, String, DateTime
+from datetime import UTC, datetime
+
+from sqlalchemy import Column, DateTime, Integer, String
 from sqlalchemy.orm import relationship
 
 from app.core.database import base
@@ -17,7 +18,7 @@ class User(base):
     role = Column(String, nullable=False)
     created_at = Column(
     DateTime,
-    default=lambda: datetime.now(timezone.utc),
+    default=lambda: datetime.now(UTC),
     )
 
     projects = relationship("Project", back_populates="creator")

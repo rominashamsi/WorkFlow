@@ -1,5 +1,7 @@
 from datetime import datetime
-from pydantic import BaseModel,Field,field_validator
+
+from pydantic import BaseModel, Field, field_validator
+
 
 class UserCreate(BaseModel):
     username: str=Field(min_length=3, max_length=50)

@@ -1,14 +1,12 @@
 
 import json
 
-from app.core.permissions import get_project_member
-
-
 from fastapi import APIRouter, Depends, HTTPException
 from redis.exceptions import RedisError
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.core.permissions import get_project_member
 from app.core.redis import redis_client
 from app.core.security import get_current_user
 from app.models.project import Project
@@ -16,12 +14,11 @@ from app.models.project_member import ProjectMember
 from app.models.user import User
 from app.schemas.project import (
     ProjectCreate,
-    ProjectResponse,
-    ProjectUpdate,
     ProjectMemberCreate,
     ProjectMemberResponse,
+    ProjectResponse,
+    ProjectUpdate,
 )
-
 
 router = APIRouter()
 

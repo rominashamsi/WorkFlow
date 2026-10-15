@@ -1,5 +1,5 @@
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import Column, DateTime, ForeignKey, Integer, String
 from sqlalchemy.orm import relationship
@@ -37,7 +37,7 @@ class Task(base):
     deadline = Column(DateTime)
     created_at = Column(
     DateTime,
-    default=lambda: datetime.now(timezone.utc),
+    default=lambda: datetime.now(UTC),
     ) 
     estimated_hours = Column(Integer)
 

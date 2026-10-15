@@ -5,10 +5,10 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from app.core.database import base
+from app.core.database import get_db as core_get_db
 from app.main import app
-from app.core.database import base, get_db as core_get_db
 from app.routers import users as users_router
-
 
 # Create an in-memory SQLite database for tests
 test_engine = create_engine(

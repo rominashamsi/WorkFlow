@@ -14,7 +14,6 @@ from app.schemas.comment import (
     CommentUpdate,
 )
 
-
 router = APIRouter()
 
 

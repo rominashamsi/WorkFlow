@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import Column, DateTime, ForeignKey, Integer, String
 from sqlalchemy.orm import relationship
@@ -15,7 +15,7 @@ class Comment(base):
     content = Column(String, nullable=False)
     created_at = Column(
     DateTime,
-    default=lambda: datetime.now(timezone.utc),
+    default=lambda: datetime.now(UTC),
     )
 
     task = relationship("Task", back_populates="comments")

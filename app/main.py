@@ -4,10 +4,7 @@ import logging
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from app.core.database import engine, base
-from app.models import User, Project, ProjectMember, Task, Comment
-from app.routers import users, projects, tasks, comments
-
+from app.routers import comments, projects, tasks, users
 
 # Logging
 logging.basicConfig(level=logging.INFO)
@@ -18,6 +15,26 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="WorkFlow")
 
+
+# Measure request processing time
+@app.middleware("http")
+async def log_request_time(request: Request, call_next):
+    import time
+
+    start_time = time.perf_counter()
+
+    response = await call_next(request)
+
+    process_time = (time.perf_counter() - start_time) * 1000
+
+    logger.info(
+        "%s %s completed in %.2f ms",
+        request.method,
+        request.url.path,
+        process_time,
+    )
+
+    return response
 
 # Handle unexpected errors
 @app.exception_handler(Exception)
