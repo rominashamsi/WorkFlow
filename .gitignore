@@ -183,3 +183,7 @@ cython_debug/
 .env
 *.db
 *.db-journal
+# Python virtual environment and cache
+venv/
+__pycache__/
+.pytest_cache/
