@@ -1,6 +1,8 @@
 
-from locust import HttpUser, task, between
 import os
+
+from locust import HttpUser, task, between
+from locust.exception import StopUser
 
 
 class WorkFlowUser(HttpUser):
@@ -17,7 +19,7 @@ class WorkFlowUser(HttpUser):
 
         if response.status_code != 200:
             print("Login failed:", response.status_code, response.text)
-            return
+            raise StopUser()
 
         access_token = response.json()["access_token"]
         self.client.headers.update(
