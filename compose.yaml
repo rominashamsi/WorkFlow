@@ -27,5 +27,21 @@ services:
     ports:
       - "6380:6379"
 
+  
+  locust:
+    image: locustio/locust
+    container_name: workflow-locust
+    ports:
+      - "8089:8089"
+    volumes:
+      - ./locust:/mnt/locust
+    environment:
+      WORKFLOW_USERNAME: ${WORKFLOW_USERNAME}
+      WORKFLOW_PASSWORD: ${WORKFLOW_PASSWORD}
+    command: -f /mnt/locust/locustfile.py --host http://app:8000
+    depends_on:
+      - app
+
+
 volumes:
   workflow_data:
