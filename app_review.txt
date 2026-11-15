@@ -1,0 +1,1722 @@
+﻿
+
+========== D:\New folder (2)\WorkFlow\app\main.py ==========
+
+
+import logging
+
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+
+from app.core.database import engine, base
+from app.models import User, Project, ProjectMember, Task, Comment
+from app.routers import users, projects, tasks, comments
+
+
+# Logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+
+
+
+app = FastAPI(title="WorkFlow")
+
+
+# Handle unexpected errors
+@app.exception_handler(Exception)
+async def general_exception_handler(
+    request: Request,
+    exc: Exception,
+):
+    logger.exception(
+        "Unexpected error while processing %s %s",
+        request.method,
+        request.url.path,
+    )
+
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": "Internal server error",
+        },
+    )
+
+
+
+
+
+app.include_router(
+    users.router,
+    prefix="/users",
+    tags=["Users"],
+)
+
+app.include_router(
+    projects.router,
+    prefix="/projects",
+    tags=["Projects"],
+)
+
+app.include_router(
+    tasks.router,
+    prefix="/projects/{project_id}/tasks",
+    tags=["Tasks"],
+)
+
+app.include_router(
+    comments.router,
+    prefix="/projects/{project_id}/tasks/{task_id}/comments",
+    tags=["Comments"],
+)
+
+
+@app.get("/")
+def home():
+    return {"message": "Welcome to WorkFlow"}
+
+
+========== D:\New folder (2)\WorkFlow\app\__init__.py ==========
+
+from app.core.database import base
+
+
+========== D:\New folder (2)\WorkFlow\app\core\config.py ==========
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    SQLALCHEMY_DATABASE_URL: str
+    SECRET_KEY: str
+    ACCESS_TOKEN_EXPIRE_MINUTES: int
+
+    model_config = SettingsConfigDict(env_file=".env")
+
+
+settings = Settings()
+
+
+========== D:\New folder (2)\WorkFlow\app\core\database.py ==========
+
+from sqlalchemy import create_engine
+from sqlalchemy.orm import declarative_base, Session
+
+from app.core.config import settings
+
+
+engine = create_engine(
+    settings.SQLALCHEMY_DATABASE_URL,
+    connect_args={"check_same_thread": False}
+)
+
+base = declarative_base()
+
+
+def get_db():
+    db = Session(bind=engine)
+
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+========== D:\New folder (2)\WorkFlow\app\core\permissions.py ==========
+
+
+from fastapi import HTTPException
+from sqlalchemy.orm import Session
+
+from app.models.project import Project
+from app.models.project_member import ProjectMember
+from app.models.user import User
+
+
+def get_project_member(
+    project_id: int,
+    current_user: User,
+    db: Session,
+) -> Project:
+    project = (
+        db.query(Project)
+        .filter(Project.id == project_id)
+        .first()
+    )
+
+    if project is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Project not found",
+        )
+
+    if current_user.role == "admin":
+        return project
+
+    member = (
+        db.query(ProjectMember)
+        .filter(
+            ProjectMember.project_id == project_id,
+            ProjectMember.user_id == current_user.id,
+        )
+        .first()
+    )
+
+    if member is None:
+        raise HTTPException(
+            status_code=403,
+            detail="You do not have access to this project",
+        )
+
+    return project
+
+
+========== D:\New folder (2)\WorkFlow\app\core\redis.py ==========
+
+
+import os
+
+import redis
+
+redis_client = redis.Redis(
+    host=os.getenv("REDIS_HOST", "localhost"),
+    port=int(os.getenv("REDIS_PORT", "6379")),
+    decode_responses=True,
+)
+
+
+========== D:\New folder (2)\WorkFlow\app\core\security.py ==========
+
+from datetime import datetime, timedelta, timezone
+
+from fastapi import Depends, HTTPException 
+from passlib.context import CryptContext
+from jose import jwt, JWTError
+from fastapi.security import OAuth2PasswordBearer
+from sqlalchemy.orm import Session
+
+from app.core.config import settings
+from app.core.database import get_db
+from app.models.user import User
+
+
+pwd_context = CryptContext(
+    schemes=["bcrypt"],
+    deprecated="auto",
+)
+
+
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/users/login/")
+
+def hash_password(password: str) -> str:
+    return pwd_context.hash(password)
+
+
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    return pwd_context.verify(plain_password, hashed_password)
+
+
+def create_access_token(data: dict) -> str:
+    to_encode = data.copy()
+
+    expire = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+
+    to_encode.update({"exp": expire})
+
+    encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm="HS256")
+
+    return encoded_jwt
+
+
+def get_current_user(
+    token: str = Depends(oauth2_scheme),
+    db: Session = Depends(get_db),
+):
+    credentials_exception = HTTPException(
+        status_code=401,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+    try:
+        payload = jwt.decode(
+            token,
+            settings.SECRET_KEY,
+            algorithms=["HS256"],
+        )
+
+        user_id = payload.get("sub")
+
+        if user_id is None:
+            raise credentials_exception
+
+        user_id = int(user_id)
+
+    except (JWTError, ValueError, TypeError):
+        raise credentials_exception
+
+    user = (
+        db.query(User)
+        .filter(User.id == user_id)
+        .first()
+    )
+
+    if user is None:
+        raise credentials_exception
+
+    return user
+
+
+
+
+def require_admin(
+    current_user: User = Depends(get_current_user)
+):
+    if current_user.role != "admin":
+        raise HTTPException(
+            status_code=403,
+            detail="Admin access required"
+        )
+
+    return current_user
+
+
+========== D:\New folder (2)\WorkFlow\app\models\comment.py ==========
+
+from datetime import datetime, timezone
+
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, String
+from sqlalchemy.orm import relationship
+
+from app.core.database import base
+
+
+class Comment(base):
+    __tablename__ = "comments"
+
+    id = Column(Integer, primary_key=True, index=True)
+    task_id = Column(Integer, ForeignKey("tasks.id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    content = Column(String, nullable=False)
+    created_at = Column(
+    DateTime,
+    default=lambda: datetime.now(timezone.utc),
+    )
+
+    task = relationship("Task", back_populates="comments")
+    user = relationship("User", back_populates="comments")
+
+
+========== D:\New folder (2)\WorkFlow\app\models\project.py ==========
+
+from datetime import datetime, timezone
+
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, String
+from sqlalchemy.orm import relationship
+
+from app.core.database import base
+
+
+class Project(base):
+    __tablename__ = "projects"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=False)
+    description = Column(String)
+    created_by = Column(Integer, ForeignKey("users.id"), nullable=False)
+    created_at = Column(
+    DateTime,
+    default=lambda: datetime.now(timezone.utc),
+    )
+
+    creator = relationship("User", back_populates="projects")
+
+    members = relationship(
+        "ProjectMember",
+        back_populates="project",
+        cascade="all, delete-orphan",
+    )
+
+    tasks = relationship(
+        "Task",
+        back_populates="project",
+        cascade="all, delete-orphan",
+    )
+
+
+========== D:\New folder (2)\WorkFlow\app\models\project_member.py ==========
+
+from sqlalchemy import Column, Integer, ForeignKey
+from sqlalchemy.orm import relationship
+from app.core.database import base
+
+
+class ProjectMember(base):
+    __tablename__="project_members"
+    id=Column(Integer, primary_key=True, index=True)
+    project_id=Column(Integer,ForeignKey("projects.id"),nullable=False)
+    user_id=Column(Integer,ForeignKey("users.id"),nullable=False)
+
+
+    project=relationship("Project",back_populates ="members")
+    user=relationship("User",back_populates="project_members")
+
+
+========== D:\New folder (2)\WorkFlow\app\models\task.py ==========
+
+
+from datetime import datetime, timezone
+
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, String
+from sqlalchemy.orm import relationship
+
+from app.core.database import base
+
+
+class Task(base):
+    __tablename__ = "tasks"
+
+    id = Column(Integer, primary_key=True, index=True)
+    title = Column(String, nullable=False)
+    description = Column(String)
+
+    project_id = Column(
+        Integer,
+        ForeignKey("projects.id"),
+        nullable=False,
+    )
+
+    created_by = Column(
+        Integer,
+        ForeignKey("users.id"),
+        nullable=True,
+    )
+
+    assigned_to = Column(
+        Integer,
+        ForeignKey("users.id"),
+        nullable=False,
+    )
+
+    status = Column(String, nullable=False)
+    priority = Column(String, nullable=False)
+    deadline = Column(DateTime)
+    created_at = Column(
+    DateTime,
+    default=lambda: datetime.now(timezone.utc),
+    ) 
+    estimated_hours = Column(Integer)
+
+    project = relationship(
+        "Project",
+        back_populates="tasks",
+    )
+
+    creator = relationship(
+        "User",
+        back_populates="created_tasks",
+        foreign_keys=[created_by],
+    )
+
+    assignee = relationship(
+        "User",
+        back_populates="tasks",
+        foreign_keys=[assigned_to],
+    )
+
+    comments = relationship(
+        "Comment",
+        back_populates="task",
+        cascade="all, delete-orphan",
+    )
+
+
+
+========== D:\New folder (2)\WorkFlow\app\models\user.py ==========
+
+
+from datetime import datetime, timezone
+from sqlalchemy import Column, Integer, String, DateTime
+from sqlalchemy.orm import relationship
+
+from app.core.database import base
+
+
+class User(base):
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String, unique=True, nullable=False)
+    first_name = Column(String, nullable=False)
+    last_name = Column(String, nullable=False)
+    password = Column(String, nullable=False)
+    role = Column(String, nullable=False)
+    created_at = Column(
+    DateTime,
+    default=lambda: datetime.now(timezone.utc),
+    )
+
+    projects = relationship("Project", back_populates="creator")
+
+   
+    tasks = relationship(
+        "Task",
+        back_populates="assignee",
+        foreign_keys="Task.assigned_to",
+    )
+
+    
+    created_tasks = relationship(
+        "Task",
+        back_populates="creator",
+        foreign_keys="Task.created_by",
+    )
+
+    comments = relationship("Comment", back_populates="user")
+    project_members = relationship("ProjectMember", back_populates="user")
+
+
+========== D:\New folder (2)\WorkFlow\app\models\__init__.py ==========
+
+from app.models.user import User
+from app.models.project import Project
+from app.models.project_member import ProjectMember
+from app.models.task import Task
+from app.models.comment import Comment
+
+
+========== D:\New folder (2)\WorkFlow\app\routers\comments.py ==========
+
+
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
+
+from app.core.database import get_db
+from app.core.permissions import get_project_member
+from app.core.security import get_current_user
+from app.models.comment import Comment
+from app.models.task import Task
+from app.models.user import User
+from app.schemas.comment import (
+    CommentCreate,
+    CommentResponse,
+    CommentUpdate,
+)
+
+
+router = APIRouter()
+
+
+@router.post("/", response_model=CommentResponse)
+def create_comment(
+    project_id: int,
+    task_id: int,
+    comment_data: CommentCreate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    project = get_project_member(project_id, current_user, db)
+
+    task = (
+        db.query(Task)
+        .filter(
+            Task.id == task_id,
+            Task.project_id == project.id,
+        )
+        .first()
+    )
+
+    if task is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Task not found",
+        )
+
+    new_comment = Comment(
+        task_id=task_id,
+        user_id=current_user.id,
+        content=comment_data.content,
+    )
+
+    db.add(new_comment)
+    db.commit()
+    db.refresh(new_comment)
+
+    return new_comment
+
+
+@router.get("/", response_model=list[CommentResponse])
+def get_comments(
+    project_id: int,
+    task_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    project = get_project_member(project_id, current_user, db)
+
+    task = (
+        db.query(Task)
+        .filter(
+            Task.id == task_id,
+            Task.project_id == project.id,
+        )
+        .first()
+    )
+
+    if task is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Task not found",
+        )
+
+    return (
+        db.query(Comment)
+        .filter(Comment.task_id == task.id)
+        .all()
+    )
+
+
+@router.put("/{comment_id}", response_model=CommentResponse)
+def update_comment(
+    project_id: int,
+    task_id: int,
+    comment_id: int,
+    comment_data: CommentUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    project = get_project_member(project_id, current_user, db)
+
+    task = (
+        db.query(Task)
+        .filter(
+            Task.id == task_id,
+            Task.project_id == project.id,
+        )
+        .first()
+    )
+
+    if task is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Task not found",
+        )
+
+    comment = (
+        db.query(Comment)
+        .filter(
+            Comment.id == comment_id,
+            Comment.task_id == task.id,
+        )
+        .first()
+    )
+
+    if comment is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Comment not found",
+        )
+
+    if comment.user_id != current_user.id:
+        raise HTTPException(
+            status_code=403,
+            detail="You can only update your own comments",
+        )
+
+    comment.content = comment_data.content
+
+    db.commit()
+    db.refresh(comment)
+
+    return comment
+
+
+@router.delete("/{comment_id}")
+def delete_comment(
+    project_id: int,
+    task_id: int,
+    comment_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    project = get_project_member(project_id, current_user, db)
+
+    task = (
+        db.query(Task)
+        .filter(
+            Task.id == task_id,
+            Task.project_id == project.id,
+        )
+        .first()
+    )
+
+    if task is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Task not found",
+        )
+
+    comment = (
+        db.query(Comment)
+        .filter(
+            Comment.id == comment_id,
+            Comment.task_id == task.id,
+        )
+        .first()
+    )
+
+    if comment is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Comment not found",
+        )
+
+    if comment.user_id != current_user.id:
+        raise HTTPException(
+            status_code=403,
+            detail="You can only delete your own comments",
+        )
+
+    db.delete(comment)
+    db.commit()
+
+    return {
+        "message": "Comment deleted successfully"
+    }
+
+
+
+
+========== D:\New folder (2)\WorkFlow\app\routers\projects.py ==========
+
+
+import json
+
+from app.core.permissions import get_project_member
+
+
+from fastapi import APIRouter, Depends, HTTPException
+from redis.exceptions import RedisError
+from sqlalchemy.orm import Session
+
+from app.core.database import get_db
+from app.core.redis import redis_client
+from app.core.security import get_current_user
+from app.models.project import Project
+from app.models.project_member import ProjectMember
+from app.models.user import User
+from app.schemas.project import (
+    ProjectCreate,
+    ProjectResponse,
+    ProjectUpdate,
+    ProjectMemberCreate,
+    ProjectMemberResponse,
+)
+
+
+router = APIRouter()
+
+CACHE_EXPIRE_SECONDS = 300
+
+
+def clear_projects_cache(user_id: int):
+    try:
+        redis_client.delete(f"projects:list:{user_id}")
+    except RedisError:
+        pass
+
+
+
+
+@router.post("/", response_model=ProjectResponse)
+def create_project(
+    project_data: ProjectCreate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    existing_project = (
+        db.query(Project)
+        .filter(
+            Project.name == project_data.name,
+            Project.created_by == current_user.id,
+        )
+        .first()
+    )
+
+    if existing_project:
+        raise HTTPException(
+            status_code=400,
+            detail="You already have a project with this name",
+        )
+
+    new_project = Project(
+        name=project_data.name,
+        description=project_data.description,
+        created_by=current_user.id,
+    )
+
+    db.add(new_project)
+    db.flush()
+
+    new_member = ProjectMember(
+        project_id=new_project.id,
+        user_id=current_user.id,
+    )
+
+    db.add(new_member)
+    db.commit()
+    db.refresh(new_project)
+
+    clear_projects_cache(current_user.id)
+
+    return new_project
+
+
+@router.get("/", response_model=list[ProjectResponse])
+def get_projects(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    cache_key = f"projects:list:{current_user.id}"
+
+    try:
+        cached_projects = redis_client.get(cache_key)
+        if cached_projects is not None:
+            return json.loads(cached_projects)
+    except (RedisError, json.JSONDecodeError):
+        pass
+
+    query = db.query(Project)
+
+    if current_user.role != "admin":
+        query = (
+            query
+            .join(
+                ProjectMember,
+                ProjectMember.project_id == Project.id,
+            )
+            .filter(ProjectMember.user_id == current_user.id)
+        )
+
+    projects = query.all()
+
+    projects_data = [
+        {
+            "id": project.id,
+            "name": project.name,
+            "description": project.description,
+            "created_by": project.created_by,
+            "created_at": (
+                project.created_at.isoformat()
+                if project.created_at
+                else None
+            ),
+        }
+        for project in projects
+    ]
+
+    try:
+        redis_client.set(
+            cache_key,
+            json.dumps(projects_data),
+            ex=CACHE_EXPIRE_SECONDS,
+        )
+    except RedisError:
+        pass
+
+
+    return projects_data
+
+
+
+@router.get("/{project_id}", response_model=ProjectResponse)
+def get_project(
+    project_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    project = get_project_member(
+        project_id,
+        current_user,
+        db,
+    )
+
+    return project
+
+
+@router.put("/{project_id}", response_model=ProjectResponse)
+def update_project(
+    project_id: int,
+    project_data: ProjectUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    project = (
+        db.query(Project)
+        .filter(Project.id == project_id)
+        .first()
+    )
+
+    if project is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Project not found",
+        )
+
+    if project.created_by != current_user.id:
+        raise HTTPException(
+            status_code=403,
+            detail="You can only update your own projects",
+        )
+
+    member_ids = [
+        member.user_id
+        for member in db.query(ProjectMember)
+        .filter(ProjectMember.project_id == project_id)
+        .all()
+    ]
+
+    if project_data.name is not None:
+        project.name = project_data.name
+
+    if project_data.description is not None:
+        project.description = project_data.description
+
+    db.commit()
+    db.refresh(project)
+
+    for user_id in member_ids:
+        clear_projects_cache(user_id)
+
+    return project
+
+
+@router.delete("/{project_id}")
+def delete_project(
+    project_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    project = (
+        db.query(Project)
+        .filter(Project.id == project_id)
+        .first()
+    )
+
+    if project is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Project not found",
+        )
+
+    if project.created_by != current_user.id:
+        raise HTTPException(
+            status_code=403,
+            detail="You can only delete your own projects",
+        )
+
+    member_ids = [
+        member.user_id
+        for member in db.query(ProjectMember)
+        .filter(ProjectMember.project_id == project_id)
+        .all()
+    ]
+
+    db.delete(project)
+    db.commit()
+
+    for user_id in member_ids:
+        clear_projects_cache(user_id)
+
+    return {"message": "Project deleted successfully"}
+
+
+@router.post("/{project_id}/members")
+def add_project_member(
+    project_id: int,
+    member_data: ProjectMemberCreate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    project = (
+        db.query(Project)
+        .filter(Project.id == project_id)
+        .first()
+    )
+
+    if project is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Project not found",
+        )
+
+    if project.created_by != current_user.id:
+        raise HTTPException(
+            status_code=403,
+            detail="Only the project creator can add members",
+        )
+
+    user = (
+        db.query(User)
+        .filter(User.id == member_data.user_id)
+        .first()
+    )
+
+    if user is None:
+        raise HTTPException(
+            status_code=404,
+            detail="User not found",
+        )
+
+    existing_member = (
+        db.query(ProjectMember)
+        .filter(
+            ProjectMember.project_id == project_id,
+            ProjectMember.user_id == member_data.user_id,
+        )
+        .first()
+    )
+
+    if existing_member:
+        raise HTTPException(
+            status_code=400,
+            detail="User is already a member of this project",
+        )
+
+    new_member = ProjectMember(
+        project_id=project_id,
+        user_id=member_data.user_id,
+    )
+
+    db.add(new_member)
+    db.commit()
+    db.refresh(new_member)
+
+    clear_projects_cache(member_data.user_id)
+
+    return {
+        "message": "User added to project successfully",
+        "project_id": project_id,
+        "user_id": member_data.user_id,
+    }
+
+
+@router.get(
+    "/{project_id}/members",
+    response_model=list[ProjectMemberResponse],
+)
+def get_project_members(
+    project_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    get_project_member(project_id, current_user, db)
+
+    members = (
+        db.query(ProjectMember)
+        .filter(ProjectMember.project_id == project_id)
+        .all()
+    )
+
+    result = []
+
+    for member in members:
+        user = (
+            db.query(User)
+            .filter(User.id == member.user_id)
+            .first()
+        )
+
+        if user is not None:
+            result.append(
+                {
+                    "id": member.id,
+                    "user_id": user.id,
+                    "username": user.username,
+                    "first_name": user.first_name,
+                    "last_name": user.last_name,
+                }
+            )
+
+    return result
+
+
+@router.delete("/{project_id}/members/{user_id}")
+def remove_project_member(
+    project_id: int,
+    user_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    project = (
+        db.query(Project)
+        .filter(Project.id == project_id)
+        .first()
+    )
+
+    if project is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Project not found",
+        )
+
+    if project.created_by != current_user.id:
+        raise HTTPException(
+            status_code=403,
+            detail="Only the project creator can remove members",
+        )
+
+    member = (
+        db.query(ProjectMember)
+        .filter(
+            ProjectMember.project_id == project_id,
+            ProjectMember.user_id == user_id,
+        )
+        .first()
+    )
+
+    if member is None:
+        raise HTTPException(
+            status_code=404,
+            detail="User is not a member of this project",
+        )
+
+    if user_id == project.created_by:
+        raise HTTPException(
+            status_code=400,
+            detail="The project creator cannot be removed",
+        )
+
+    db.delete(member)
+    db.commit()
+
+    clear_projects_cache(user_id)
+
+    return {"message": "User removed from project successfully"}
+
+
+========== D:\New folder (2)\WorkFlow\app\routers\tasks.py ==========
+
+
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
+
+from app.core.database import get_db
+from app.core.permissions import get_project_member
+from app.core.security import get_current_user
+from app.models.project import Project
+from app.models.project_member import ProjectMember
+from app.models.task import Task
+from app.models.user import User
+from app.schemas.task import TaskCreate, TaskResponse, TaskUpdate
+
+
+router = APIRouter()
+
+
+@router.post("/", response_model=TaskResponse)
+def create_task(
+    project_id: int,
+    task_data: TaskCreate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    project = get_project_member(
+        project_id,
+        current_user,
+        db,
+    )
+
+    assigned_user = (
+        db.query(User)
+        .filter(User.id == task_data.assigned_to)
+        .first()
+    )
+
+    if assigned_user is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Assigned user not found",
+        )
+
+    assigned_user_is_member = (
+        db.query(ProjectMember)
+        .filter(
+            ProjectMember.project_id == project_id,
+            ProjectMember.user_id == task_data.assigned_to,
+        )
+        .first()
+    )
+
+    if assigned_user_is_member is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Assigned user is not a member of this project",
+        )
+
+    new_task = Task(
+        title=task_data.title,
+        description=task_data.description,
+        project_id=project.id,
+        created_by=current_user.id,
+        assigned_to=task_data.assigned_to,
+        status=task_data.status,
+        priority=task_data.priority,
+        deadline=task_data.deadline,
+        estimated_hours=task_data.estimated_hours,
+    )
+
+    db.add(new_task)
+    db.commit()
+    db.refresh(new_task)
+
+    return new_task
+
+
+@router.get("/", response_model=list[TaskResponse])
+def get_tasks(
+    project_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    get_project_member(
+        project_id,
+        current_user,
+        db,
+    )
+
+    tasks = (
+        db.query(Task)
+        .filter(Task.project_id == project_id)
+        .all()
+    )
+
+    return tasks
+
+
+@router.get("/{task_id}", response_model=TaskResponse)
+def get_task(
+    project_id: int,
+    task_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    get_project_member(
+        project_id,
+        current_user,
+        db,
+    )
+
+    task = (
+        db.query(Task)
+        .filter(
+            Task.id == task_id,
+            Task.project_id == project_id,
+        )
+        .first()
+    )
+
+    if task is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Task not found",
+        )
+
+    return task
+
+
+@router.put("/{task_id}", response_model=TaskResponse)
+def update_task(
+    project_id: int,
+    task_id: int,
+    task_data: TaskUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    project = get_project_member(
+        project_id,
+        current_user,
+        db,
+    )
+
+    if project.created_by != current_user.id:
+        raise HTTPException(
+            status_code=403,
+            detail="Only the project creator can update tasks",
+        )
+
+    task = (
+        db.query(Task)
+        .filter(
+            Task.id == task_id,
+            Task.project_id == project_id,
+        )
+        .first()
+    )
+
+    if task is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Task not found",
+        )
+
+    if task_data.title is not None:
+        task.title = task_data.title
+
+    if task_data.description is not None:
+        task.description = task_data.description
+
+    if task_data.assigned_to is not None:
+        assigned_user = (
+            db.query(User)
+            .filter(User.id == task_data.assigned_to)
+            .first()
+        )
+
+        if assigned_user is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Assigned user not found",
+            )
+
+        assigned_user_is_member = (
+            db.query(ProjectMember)
+            .filter(
+                ProjectMember.project_id == project_id,
+                ProjectMember.user_id == task_data.assigned_to,
+            )
+            .first()
+        )
+
+        if assigned_user_is_member is None:
+            raise HTTPException(
+                status_code=400,
+                detail="Assigned user is not a member of this project",
+            )
+
+        task.assigned_to = task_data.assigned_to
+
+    if task_data.status is not None:
+        task.status = task_data.status
+
+    if task_data.priority is not None:
+        task.priority = task_data.priority
+
+    if task_data.deadline is not None:
+        task.deadline = task_data.deadline
+
+    if task_data.estimated_hours is not None:
+        task.estimated_hours = task_data.estimated_hours
+
+    db.commit()
+    db.refresh(task)
+
+    return task
+
+
+@router.delete("/{task_id}")
+def delete_task(
+    project_id: int,
+    task_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    project = get_project_member(
+        project_id,
+        current_user,
+        db,
+    )
+
+    if project.created_by != current_user.id:
+        raise HTTPException(
+            status_code=403,
+            detail="Only the project creator can delete tasks",
+        )
+
+    task = (
+        db.query(Task)
+        .filter(
+            Task.id == task_id,
+            Task.project_id == project_id,
+        )
+        .first()
+    )
+
+    if task is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Task not found",
+        )
+
+    db.delete(task)
+    db.commit()
+
+    return {"message": "Task deleted successfully"}
+
+
+========== D:\New folder (2)\WorkFlow\app\routers\users.py ==========
+
+from fastapi import APIRouter, Depends, HTTPException, Form
+from sqlalchemy.orm import Session
+from app.core.database import engine
+from app.core.security import hash_password, verify_password, create_access_token, get_current_user, require_admin
+from app.models.user import User
+from app.schemas.user import UserCreate, UserResponse, Token, UserUpdate, PasswordUpdate
+from app.core.database import get_db
+
+router = APIRouter()
+
+class LoginForm:
+    def __init__(
+        self,
+        username: str = Form(...,description="Username"),
+        password: str = Form(...,description="Password")
+    ):
+        self.username = username
+        self.password = password
+
+
+def get_db():
+    db = Session(bind=engine)
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+@router.post("/register/", response_model=UserResponse)
+def register_user(user: UserCreate, db: Session = Depends(get_db)):
+
+
+    existing_user = db.query(User).filter(User.username == user.username).first()
+    if existing_user:
+        raise HTTPException(status_code=400, detail="Username already exists")
+
+
+    new_user = User(
+        username=user.username,
+        first_name=user.first_name,
+        last_name=user.last_name,
+        password=hash_password(user.password),
+        role="member",
+    )
+
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+
+    return new_user
+
+
+@router.post("/login/", response_model=Token)
+def login_user(form_data: LoginForm = Depends(), db: Session = Depends(get_db)):
+
+    user = db.query(User).filter(User.username == form_data.username).first()
+
+    if not user or not verify_password(form_data.password, user.password):
+
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+
+    access_token = create_access_token(data={"sub": str(user.id), "role": user.role})
+
+    return {"access_token": access_token,
+             "token_type": "bearer"}
+
+
+@router.get("/me", response_model=UserResponse)
+def get_my_profile(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+
+):
+    user = (
+        db.query(User)
+        .filter(User.id == current_user.id)
+        .first()
+    )
+    return user
+
+
+
+
+@router.put("/me", response_model=UserResponse)
+def update_my_profile(
+    user_data: UserUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    user = (
+        db.query(User)
+        .filter(User.id == current_user.id)
+        .first()
+    )
+
+    if user_data.username is not None:
+        existing_user = (
+            db.query(User)
+            .filter(User.username == user_data.username)
+            .first()
+        )
+
+        if existing_user and existing_user.id != user.id:
+            raise HTTPException(
+                status_code=400,
+                detail="Username already exists",
+            )
+
+        user.username = user_data.username
+
+    if user_data.first_name is not None:
+        user.first_name = user_data.first_name
+
+    if user_data.last_name is not None:
+        user.last_name = user_data.last_name
+
+    db.commit()
+    db.refresh(user)
+
+    return user
+
+
+@router.put("/me/password")
+def update_my_password(
+    password_data: PasswordUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if not verify_password(
+        password_data.current_password,
+        current_user.password,
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Current password is incorrect",
+        )
+
+    current_user.password = hash_password(
+        password_data.new_password
+    )
+
+    db.commit()
+
+    return {
+        "message": "Password updated successfully"
+    }
+
+
+@router.delete("/me")
+def delete_my_account(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    db.delete(current_user)
+    db.commit()
+
+    return {
+        "message": "Account deleted successfully"
+    }
+
+
+
+@router.get("/", response_model=list[UserResponse])
+def get_users(
+    current_user: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    users = db.query(User).all()
+
+    return users
+
+
+
+@router.get("/{user_id}", response_model=UserResponse)
+def get_user(
+    user_id: int,
+    current_user: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    user = (
+        db.query(User)
+        .filter(User.id == user_id)
+        .first()
+    )
+
+    if user is None:
+        raise HTTPException(
+            status_code=404,
+            detail="User not found",
+        )
+
+    return user
+
+    
+
+
+========== D:\New folder (2)\WorkFlow\app\routers\__init__.py ==========
+
+
+
+========== D:\New folder (2)\WorkFlow\app\schemas\comment.py ==========
+
+from datetime import datetime
+
+from pydantic import BaseModel, Field
+
+
+class CommentCreate(BaseModel):
+    content: str = Field(min_length=1, max_length=1000)
+
+
+class CommentResponse(BaseModel):
+    id: int
+    task_id: int
+    user_id: int
+    content: str
+    created_at: datetime
+
+
+class CommentUpdate(BaseModel):
+    content: str = Field(min_length=1, max_length=1000)
+
+
+========== D:\New folder (2)\WorkFlow\app\schemas\project.py ==========
+
+from datetime import datetime
+from pydantic import BaseModel, Field
+
+
+class ProjectCreate(BaseModel):
+    name: str = Field(min_length=3, max_length=100)
+    description: str | None = Field(default=None, max_length=500)
+
+
+
+
+class ProjectResponse(BaseModel):
+    id: int
+    name: str
+    description: str | None
+    created_by: int
+    created_at: datetime
+
+
+
+class ProjectUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=2, max_length=100)
+    description: str | None = Field(default=None, max_length=500)
+
+
+class ProjectMemberCreate(BaseModel):
+    user_id: int
+
+
+class ProjectMemberResponse(BaseModel):
+    id: int
+    user_id: int
+    username: str
+    first_name: str
+    last_name: str
+
+
+========== D:\New folder (2)\WorkFlow\app\schemas\task.py ==========
+
+from datetime import datetime
+
+from pydantic import BaseModel, Field
+
+
+class TaskCreate(BaseModel):
+    title: str = Field(min_length=2, max_length=200)
+    description: str | None = Field(default=None, max_length=1000)
+    assigned_to: int
+    status: str = "todo"
+    priority: str = "medium"
+    deadline: datetime | None = None
+    estimated_hours: int | None = Field(default=None, ge=0)
+
+
+class TaskResponse(BaseModel):
+    id: int
+    title: str
+    description: str | None
+    project_id: int
+    assigned_to: int
+    status: str
+    priority: str
+    deadline: datetime | None
+    estimated_hours: int | None
+    created_at: datetime
+    created_by: int | None
+
+
+class TaskUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=2, max_length=200)
+    description: str | None = Field(default=None, max_length=1000)
+    assigned_to: int | None = None
+    status: str | None = None
+    priority: str | None = None
+    deadline: datetime | None = None
+    estimated_hours: int | None = Field(default=None, ge=0)
+
+
+========== D:\New folder (2)\WorkFlow\app\schemas\user.py ==========
+
+from datetime import datetime
+from pydantic import BaseModel,Field,field_validator
+
+class UserCreate(BaseModel):
+    username: str=Field(min_length=3, max_length=50)
+    first_name: str=Field(min_length=2, max_length=50)
+    last_name: str=Field(min_length=2, max_length=50)
+    password: str=Field(min_length=6, max_length=100)
+
+    @field_validator("username")
+    @classmethod
+    def validate_username(cls, value: str):
+        value = value.strip()
+
+        if " " in value:
+           raise ValueError("Username cannot contain spaces")
+        return value
+
+
+
+class UserResponse(BaseModel):
+    id: int
+    username: str
+    first_name: str
+    last_name: str
+    role: str
+    created_at: datetime
+
+
+
+class UserUpdate(BaseModel):
+    first_name: str  | None=Field(default=None, min_length=2, max_length=50)
+    last_name: str | None=Field(default=None, min_length=2, max_length=50)
+    username: str | None = Field(default=None, min_length=3, max_length=50)
+
+    @field_validator("username")
+    @classmethod
+    def validate_username(cls, value: str | None):
+        if value is not None:
+            value = value.strip()
+
+            if " " in value:
+                raise ValueError("Username cannot contain spaces")
+
+        return value
+
+
+class PasswordUpdate(BaseModel):
+    current_password: str=Field(min_length=6, max_length=100)
+    new_password: str=Field(min_length=6, max_length=100)
+
+
+class Token(BaseModel):
+    access_token: str
+    token_type: str 
+
+
+========== D:\New folder (2)\WorkFlow\app\schemas\__init__.py ==========
+
